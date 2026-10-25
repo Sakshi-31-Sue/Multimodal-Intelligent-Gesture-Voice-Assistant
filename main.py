@@ -1,0 +1,448 @@
+"""Multimodal Intelligent Gesture and Voice Response Assistant
+Windows-friendly prototype: webcam gestures + microphone commands + spoken feedback.
+Run with Python 3.10-3.12 and dependencies in requirements.txt.
+"""
+from __future__ import annotations
+import datetime
+import os
+import platform
+import queue
+import subprocess
+import threading
+import time
+import urllib.parse
+import webbrowser
+from pathlib import Path
+
+import cv2
+import mediapipe as mp
+import pyautogui
+import pyttsx3
+import speech_recognition as sr
+
+APP_NAME = "Multimodal Intelligent Gesture and Voice Response Assistant"
+pyautogui.FAILSAFE = True  # move cursor to top-left to abort PyAutoGUI actions
+pyautogui.PAUSE = 0.08
+
+speech_queue: queue.Queue[str] = queue.Queue()
+stop_event = threading.Event()
+DB = None
+FUSION = None
+
+
+def speak(text: str) -> None:
+    """Queue speech so multiple threads don't use the TTS engine simultaneously."""
+    print(f"Assistant: {text}")
+    speech_queue.put(text)
+
+
+def speech_output_worker() -> None:
+    engine = pyttsx3.init()
+    engine.setProperty("rate", 175)
+    while not stop_event.is_set() or not speech_queue.empty():
+        try:
+            message = speech_queue.get(timeout=0.25)
+        except queue.Empty:
+            continue
+        try:
+            engine.say(message)
+            engine.runAndWait()
+        except Exception as exc:
+            print("Speech output error:", exc)
+        finally:
+            speech_queue.task_done()
+
+
+def open_application(name: str) -> bool:
+    """Launch a few common Windows apps; return False if unavailable."""
+    system = platform.system().lower()
+    commands = {
+        "notepad": ["notepad.exe"],
+        "calculator": ["calc.exe"],
+        "paint": ["mspaint.exe"],
+        "file explorer": ["explorer.exe"],
+        "explorer": ["explorer.exe"],
+        # EXTRA_VOICE_COMMANDS_V1
+        "word": ["cmd.exe", "/c", "start", "", "winword"],
+        "excel": ["cmd.exe", "/c", "start", "", "excel"],
+        "powerpoint": ["cmd.exe", "/c", "start", "", "powerpnt"],
+        "task manager": ["taskmgr.exe"],
+
+    }
+    if name not in commands:
+        return False
+    try:
+        if system == "windows" and name == "settings":
+            os.startfile("ms-settings:")
+            return True
+        if system == "windows":
+            subprocess.Popen(commands[name], shell=False)
+            return True
+        # A clear message is better than trying Windows-specific applications elsewhere.
+        return False
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def handle_command(raw_text: str) -> None:
+    text = raw_text.lower().strip()
+    if not text:
+        return
+    print(f"You: {text}")
+    if text == "left_click":
+        pyautogui.click()
+        speak("Click.")
+        return
+    if text.startswith("search:"):
+        query = text.split(":", 1)[1].strip()
+        if query:
+            webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote_plus(query))
+            speak("Searching for " + query)
+        return
+
+    if any(x in text for x in ("exit assistant", "quit assistant", "stop assistant", "close assistant")):
+        speak("Stopping the assistant. Goodbye.")
+        stop_event.set()
+    elif "time" in text:
+        speak("The time is " + datetime.datetime.now().strftime("%I:%M %p"))
+    elif "date" in text or "today" in text:
+        speak("Today is " + datetime.datetime.now().strftime("%A, %d %B %Y"))
+    # EXTRA_VOICE_COMMANDS_V1
+    elif text in ("open chatgpt", "chatgpt", "open chat gpt"):
+        webbrowser.open("https://chatgpt.com")
+        speak("Opening ChatGPT.")
+    elif text in ("open wikipedia", "wikipedia"):
+        webbrowser.open("https://www.wikipedia.org")
+        speak("Opening Wikipedia.")
+    elif text in ("open google maps", "open maps", "maps"):
+        webbrowser.open("https://maps.google.com")
+        speak("Opening Google Maps.")
+    elif "open youtube" in text or "youtube" == text:
+        webbrowser.open("https://www.youtube.com")
+        speak("Opening YouTube.")
+    elif "open google" in text or text == "google":
+        webbrowser.open("https://www.google.com")
+        speak("Opening Google.")
+    elif "open gmail" in text or "gmail" == text:
+        webbrowser.open("https://mail.google.com")
+        speak("Opening Gmail.")
+    elif "open github" in text or "github" == text:
+        webbrowser.open("https://github.com")
+        speak("Opening GitHub.")
+    elif text.startswith("search for ") or text.startswith("search "):
+        query = text.removeprefix("search for ").removeprefix("search ").strip()
+        if query:
+            webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote_plus(query))
+            speak("Searching the web for " + query)
+        else:
+            speak("Please say what you want to search for.")
+    elif text.startswith("open "):
+        app = text.removeprefix("open ").strip()
+        if open_application(app):
+            speak("Opening " + app)
+        else:
+            speak("I cannot open that application yet. Try Notepad, Calculator, Paint, or File Explorer.")
+    elif "take screenshot" in text or "screenshot" in text:
+        folder = Path.home() / "Pictures" / "AssistantScreenshots"
+        folder.mkdir(parents=True, exist_ok=True)
+        filename = folder / ("screenshot_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + ".png")
+        try:
+            pyautogui.screenshot().save(filename)
+            speak("Screenshot saved in your Pictures folder.")
+        except Exception as exc:
+            speak("I could not take the screenshot: " + str(exc))
+    elif "scroll down" in text:
+        pyautogui.scroll(-5)
+        speak("Scrolling down.")
+    elif "scroll up" in text:
+        pyautogui.scroll(5)
+        speak("Scrolling up.")
+    elif "volume up" in text:
+        pyautogui.press("volumeup")
+        speak("Volume up.")
+    elif "volume down" in text:
+        pyautogui.press("volumedown")
+        speak("Volume down.")
+    elif "mute" in text:
+        pyautogui.press("volumemute")
+        speak("Toggled mute.")
+    elif "thank you" in text or "thanks" in text:
+        speak("You're welcome.")
+    elif "hello" in text or "hey assistant" in text:
+        speak("Hello! I am ready. You can ask me to open an application or website, search the web, or tell you the time.")
+    else:
+        speak("Sorry, I did not understand that command. Please try again.")
+
+
+def voice_worker() -> None:
+    """Offline voice recognition using Vosk. A model must be downloaded separately."""
+    import json
+    from intent_parser import parse_intent
+    from fusion_engine import FusionEngine
+    from database import Database
+    model_path = Path(os.getenv("VOSK_MODEL_PATH", str(Path(__file__).resolve().parent / "models" / "vosk-model-small-en-us-0.15")))
+    if not model_path.exists():
+        speak(f"Offline voice model not found at {model_path}. Install a Vosk model as described in README. Gesture control can still run.")
+        return
+    try:
+        import sounddevice as sd
+        from vosk import Model, KaldiRecognizer
+        model = Model(str(model_path))
+        recognizer = KaldiRecognizer(model, 16000)
+        audio_q = queue.Queue()
+        def callback(indata, frames, time_info, status):
+            if status: print("Microphone status:", status)
+            audio_q.put(bytes(indata))
+        speak("Offline voice control is ready. Say a command.")
+        with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype="int16", channels=1, callback=callback):
+            while not stop_event.is_set():
+                try: data = audio_q.get(timeout=0.3)
+                except queue.Empty: continue
+                if recognizer.AcceptWaveform(data):
+                    phrase = json.loads(recognizer.Result()).get("text", "").strip()
+                    if not phrase: continue
+                    print("You:", phrase)
+                    command, confidence = parse_intent(phrase)
+                    if command:
+                        if FUSION is not None:
+                            FUSION.submit("voice", command, confidence)
+                        else:
+                            speak("Fusion engine is not initialized.")
+                    else:
+                        speak("I did not understand that command. Say help for examples.")
+    except Exception as exc:
+        print("Offline voice error:", exc)
+        speak("Voice control could not start. Check the Vosk model, microphone and sounddevice installation.")
+
+
+def fingers_up(hand_landmarks) -> tuple[bool, bool, bool, bool, bool]:
+    """Estimate whether each finger is extended (thumb, index, middle, ring, pinky)."""
+    lm = hand_landmarks.landmark
+    # For the thumb, x-direction is handedness-dependent; use handedness supplied by MediaPipe below.
+    index = lm[8].y < lm[6].y
+    middle = lm[12].y < lm[10].y
+    ring = lm[16].y < lm[14].y
+    pinky = lm[20].y < lm[18].y
+    return (False, index, middle, ring, pinky)
+
+
+def gesture_worker() -> None:
+    """Index finger moves cursor; thumb/index pinch clicks. Press Q in camera window to quit."""
+    try:
+        camera_index = int(os.getenv("CAMERA_INDEX", "0"))
+        camera = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW if platform.system() == "Windows" else 0)
+        if not camera.isOpened():
+            camera.release()
+            camera = cv2.VideoCapture(camera_index)
+        if not camera.isOpened():
+            speak("I could not access the webcam. Check that it is connected and not used by another app.")
+            return
+    except Exception as exc:
+        print("Camera error:", exc)
+        speak("I could not start the webcam.")
+        return
+
+    mp_hands = mp.solutions.hands
+    mp_draw = mp.solutions.drawing_utils
+    screen_w, screen_h = pyautogui.size()
+    smooth_x, smooth_y = 0.0, 0.0
+    smoothing = 0.28
+    was_pinching = False
+    last_click = 0.0
+    was_pose = None
+    last_gesture_at = 0.0
+
+    try:
+        with mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=1,
+            model_complexity=0,
+            min_detection_confidence=0.65,
+            min_tracking_confidence=0.6,
+        ) as hands:
+            speak("Gesture control is ready. Show one hand. Move your index finger to move the cursor and pinch thumb and index finger to click. Press Q in the camera window to exit.")
+            while not stop_event.is_set():
+                ok, frame = camera.read()
+                if not ok:
+                    print("Unable to read a webcam frame.")
+                    break
+                frame = cv2.flip(frame, 1)
+                h, w = frame.shape[:2]
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = hands.process(rgb)
+                status = "Show one hand"
+
+                if results.multi_hand_landmarks:
+                    hand = results.multi_hand_landmarks[0]
+                    mp_draw.draw_landmarks(frame, hand, mp_hands.HAND_CONNECTIONS)
+                    lm = hand.landmark
+                    # Map a central camera area to the full screen for easier cursor control.
+                    ix = min(max(lm[8].x, 0.08), 0.92)
+                    iy = min(max(lm[8].y, 0.08), 0.92)
+                    target_x = (ix - 0.08) / 0.84 * screen_w
+                    target_y = (iy - 0.08) / 0.84 * screen_h
+                    smooth_x += (target_x - smooth_x) * smoothing
+                    smooth_y += (target_y - smooth_y) * smoothing
+                    try:
+                        pyautogui.moveTo(int(smooth_x), int(smooth_y), duration=0)
+                    except pyautogui.FailSafeException:
+                        speak("Emergency stop activated.")
+                        stop_event.set()
+                        break
+
+                    # GESTURE_EXTENSIONS_V1
+                    thumb = lm[4]
+                    index = lm[8]
+                    middle = lm[12]
+                    ring = lm[16]
+
+                    def distance(a, b):
+                        return ((a.x - b.x) ** 2 + (a.y - b.y) ** 2) ** 0.5
+
+                    threshold = float(os.getenv("PINCH_THRESHOLD", "0.045"))
+                    pinching = distance(thumb, index) < threshold
+                    middle_pinch = distance(thumb, middle) < threshold
+                    ring_pinch = distance(thumb, ring) < threshold
+                    now = time.time()
+
+                    # Pinch actions only fire on the transition into a pinch.
+                    if now - last_gesture_at > 0.55:
+                        if pinching and not was_pinching:
+                            if FUSION is not None:
+                                FUSION.submit("gesture", "left_click", 0.92)
+                            else:
+                                pyautogui.click()
+                            status = "LEFT CLICK"
+                            last_gesture_at = now
+                        elif middle_pinch and not was_pinching:
+                            pyautogui.rightClick()
+                            status = "RIGHT CLICK"
+                            last_gesture_at = now
+                        elif ring_pinch and not was_pinching:
+                            pyautogui.doubleClick(interval=0.12)
+                            status = "DOUBLE CLICK"
+                            last_gesture_at = now
+
+                    # Detect poses using the existing MediaPipe finger landmarks.
+                    _, idx_up, mid_up, ring_up, pinky_up = fingers_up(hand)
+                    pose = (idx_up, mid_up, ring_up, pinky_up)
+
+                    if not (pinching or middle_pinch or ring_pinch):
+                        action_pose = None
+                        if pose == (True, True, True, True):
+                            action_pose = "open_palm"
+                        elif pose == (False, False, False, False):
+                            action_pose = "fist"
+                        elif pose == (True, True, False, False):
+                            action_pose = "peace"
+                        elif pose == (True, True, True, False):
+                            action_pose = "three_fingers"
+
+                        # Trigger once per pose, then require a different pose
+                        # before that gesture can trigger again.
+                        if action_pose is None:
+                            was_pose = None
+                        elif action_pose != was_pose and now - last_gesture_at > 0.55:
+                            if action_pose == "open_palm":
+                                pyautogui.scroll(3)
+                                status = "SCROLL UP"
+                            elif action_pose == "fist":
+                                pyautogui.scroll(-3)
+                                status = "SCROLL DOWN"
+                            elif action_pose == "peace":
+                                pyautogui.press("space")
+                                status = "SPACE / PLAY-PAUSE"
+                            elif action_pose == "three_fingers":
+                                folder = Path.home() / "Pictures" / "AssistantScreenshots"
+                                folder.mkdir(parents=True, exist_ok=True)
+                                filename = folder / (
+                                    "gesture_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + ".png"
+                                )
+                                pyautogui.screenshot().save(filename)
+                                status = "SCREENSHOT SAVED"
+                            last_gesture_at = now
+                            was_pose = action_pose
+
+                    was_pinching = pinching or middle_pinch or ring_pinch
+                else:
+                    was_pinching = False
+
+                cv2.rectangle(frame, (8, 8), (min(w - 8, 470), 74), (25, 25, 25), -1)
+                cv2.putText(frame, "Gesture + Voice Assistant", (20, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+                cv2.putText(frame, status, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 255, 100), 2)
+                cv2.imshow("Gesture Control - press Q to quit", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    stop_event.set()
+                    break
+    except AttributeError as exc:
+        print("MediaPipe API issue:", exc)
+        speak("Your MediaPipe version is incompatible. Install the pinned requirements from requirements.txt.")
+    except Exception as exc:
+        print("Gesture control error:", exc)
+        speak("Gesture control stopped because of an error. Check the terminal for details.")
+    finally:
+        camera.release()
+        cv2.destroyAllWindows()
+
+
+def execute_fused_command(command: str) -> str:
+    mapping = {
+        "open_calculator": "open calculator", "open_notepad": "open notepad",
+        # EXTRA_VOICE_COMMANDS_V1
+        "open_word": "open word",
+        "open_excel": "open excel",
+        "open_powerpoint": "open powerpoint",
+        "open_paint": "open paint",
+        "open_file_explorer": "open file explorer",
+        "open_task_manager": "open task manager",
+        "open_settings": "open settings",
+        "open_chatgpt": "open chatgpt",
+        "open_wikipedia": "open wikipedia",
+        "open_maps": "open google maps",
+        "scroll_up": "scroll up",
+        "scroll_down": "scroll down",
+        "open_browser": "open google", "open_youtube": "open youtube",
+        "volume_up": "volume up", "volume_down": "volume down", "mute": "mute",
+        "take_screenshot": "take screenshot", "what_time": "time", "undo": "undo",
+        "repeat": "repeat", "stop_assistant": "stop assistant", "help": "help",
+        "confirm": "confirm", "cancel": "cancel", "left_click": "left_click"
+    }
+    handle_command(mapping.get(command, command))
+    return "Action dispatched: " + command
+
+
+def main() -> None:
+    global DB, FUSION
+    from database import Database
+    from fusion_engine import FusionEngine
+    DB = Database()
+    FUSION = FusionEngine(DB, speak, execute_fused_command)
+    print("\n" + "=" * 68)
+    print(APP_NAME)
+    print("=" * 68)
+    print("Keep this terminal open while the assistant runs.")
+    print("Voice recognition uses the local Vosk model when installed; no cloud speech service is used.")
+    print("To stop: say 'stop assistant' or press Q in the webcam window.")
+    print("PyAutoGUI safety: move the cursor to the top-left corner to trigger its fail-safe.\n")
+
+    threading.Thread(target=speech_output_worker, name="speech-output", daemon=True).start()
+    voice_thread = threading.Thread(target=voice_worker, name="voice-input", daemon=True)
+    voice_thread.start()
+    try:
+        gesture_worker()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_event.set()
+        voice_thread.join(timeout=2)
+        # Allow queued speech to finish briefly.
+        deadline = time.time() + 2
+        while not speech_queue.empty() and time.time() < deadline:
+            time.sleep(0.1)
+        if DB is not None:
+            DB.close()
+        print("Assistant closed.")
+
+
+if __name__ == "__main__":
+    main()
