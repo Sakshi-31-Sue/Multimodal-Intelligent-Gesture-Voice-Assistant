@@ -7,6 +7,7 @@ import datetime
 import os
 import platform
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -89,6 +90,66 @@ def handle_command(raw_text: str) -> None:
     if not text:
         return
     print(f"You: {text}")
+
+    # WORD_VOICE_COMMANDS_V1
+    if text.startswith("type_text:"):
+        pyautogui.write(text.split(":", 1)[1], interval=0.02)
+        speak("Typing text.")
+        return
+    if text.startswith("set_font:"):
+        font = text.split(":", 1)[1].strip()
+        pyautogui.hotkey("ctrl", "shift", "f")
+        time.sleep(0.3)
+        pyautogui.write(font, interval=0.04)
+        pyautogui.press("enter")
+        speak("Font changed to " + font)
+        return
+    if text.startswith("set_font_size:"):
+        size = text.split(":", 1)[1].strip()
+        if size.isdigit() and 1 <= int(size) <= 200:
+            pyautogui.hotkey("ctrl", "shift", "p")
+            time.sleep(0.3)
+            pyautogui.write(size)
+            pyautogui.press("enter")
+            speak("Font size changed to " + size)
+        else:
+            speak("Say a font size from 1 to 200.")
+        return
+    if text.startswith("ribbon_tab:"):
+        tab = text.split(":", 1)[1].strip()
+        keys = {"home":"h", "insert":"n", "layout":"p", "review":"r",
+                "view":"w", "references":"s", "mailings":"m"}
+        if tab in keys:
+            pyautogui.press("esc")
+            pyautogui.hotkey("alt", keys[tab])
+            speak("Opening " + tab + " tab.")
+        return
+    if text.startswith("format:"):
+        key = {"bold":"b", "italic":"i", "underline":"u"}.get(text.split(":",1)[1])
+        if key:
+            pyautogui.hotkey("ctrl", key)
+            speak("Formatting toggled.")
+        return
+    if text.startswith("shortcut:"):
+        action = text.split(":", 1)[1]
+        keys = {
+            "select_all":("ctrl","a"), "save":("ctrl","s"),
+            "undo":("ctrl","z"), "beginning":("ctrl","home"),
+            "end":("ctrl","end"), "font_up":("ctrl","shift",">"),
+            "font_down":("ctrl","shift","<"), "align_center":("ctrl","e"),
+            "align_left":("ctrl","l"), "align_right":("ctrl","r"),
+            "justify":("ctrl","j")
+        }
+        if action == "enter":
+            pyautogui.press("enter")
+        elif action in keys:
+            pyautogui.hotkey(*keys[action])
+        speak("Done.")
+        return
+    if text == "help":
+        speak("Try type this hello world, go to Home tab, change font to Arial, change font size to 16, make it bold, center align, or save document.")
+        return
+
     if text == "left_click":
         pyautogui.click()
         speak("Click.")
@@ -100,8 +161,8 @@ def handle_command(raw_text: str) -> None:
             speak("Searching for " + query)
         return
 
-    if any(x in text for x in ("exit assistant", "quit assistant", "stop assistant", "close assistant")):
-        speak("Stopping the assistant. Goodbye.")
+    if any(x in text for x in (" exit assistant", "quit assistant", "stop assistant", "close assistant")):
+        speak("Stopping the assistant.  .")
         stop_event.set()
     elif "time" in text:
         speak("The time is " + datetime.datetime.now().strftime("%I:%M %p"))
@@ -136,6 +197,88 @@ def handle_command(raw_text: str) -> None:
             speak("Searching the web for " + query)
         else:
             speak("Please say what you want to search for.")
+    # OFFICE_FOLLOWUP_COMMANDS_V1
+    elif text.startswith(("type:", "type ", "write:", "write ", "dictate:", "dictate ")):
+        content = re.sub(r"^(type|write|dictate)[: ]+", "", text, count=1, flags=re.I).strip()
+        if content:
+            pyautogui.write(content, interval=0.015)
+            speak("Typing.")
+        else:
+            speak("Please say the text after type.")
+    elif text.startswith("tab:"):
+        tab = text.split(":", 1)[1].strip().lower()
+        tab_keys = {"home": "h", "insert": "n", "page layout": "p", "layout": "p",
+                    "references": "s", "mailings": "m", "review": "r", "view": "w",
+                    "design": "g", "formulas": "m", "formula": "m", "data": "a",
+                    "draw": "j", "help": "y"}
+        if tab in tab_keys:
+            pyautogui.press("esc")
+            pyautogui.hotkey("alt", tab_keys[tab])
+            speak("Opening " + tab + " tab.")
+        else:
+            speak("Unknown tab. Try Home, Insert, Layout, Review, View, Data or Formulas.")
+    elif text in ("save", "save file", "save document", "save workbook"):
+        pyautogui.hotkey("ctrl", "s")
+        speak("Save command sent.")
+    elif text in ("select all", "select everything"):
+        pyautogui.hotkey("ctrl", "a")
+        speak("Selected all.")
+    elif text in ("copy", "copy that"):
+        pyautogui.hotkey("ctrl", "c")
+        speak("Copied.")
+    elif text in ("paste", "paste that"):
+        pyautogui.hotkey("ctrl", "v")
+        speak("Pasted.")
+    elif text in ("cut", "cut that"):
+        pyautogui.hotkey("ctrl", "x")
+        speak("Cut.")
+    elif text in ("undo", "undo that"):
+        pyautogui.hotkey("ctrl", "z")
+        speak("Undo.")
+    elif text in ("redo", "redo that"):
+        pyautogui.hotkey("ctrl", "y")
+        speak("Redo.")
+    elif text in ("bold", "make bold", "bold this"):
+        pyautogui.hotkey("ctrl", "b")
+        speak("Bold toggled.")
+    elif text in ("italic", "make italic", "italic this"):
+        pyautogui.hotkey("ctrl", "i")
+        speak("Italic toggled.")
+    elif text in ("underline", "underline this"):
+        pyautogui.hotkey("ctrl", "u")
+        speak("Underline toggled.")
+    elif text in ("increase font size", "make font bigger", "font size up"):
+        pyautogui.hotkey("ctrl", "shift", ">")
+        speak("Font size increased.")
+    elif text in ("decrease font size", "make font smaller", "font size down"):
+        pyautogui.hotkey("ctrl", "shift", "<")
+        speak("Font size decreased.")
+    elif text in ("new line", "next line", "press enter", "enter"):
+        pyautogui.press("enter")
+    elif text in ("press tab", "tab key"):
+        pyautogui.press("tab")
+    elif text in ("press escape", "escape"):
+        pyautogui.press("esc")
+    elif text in ("press backspace", "backspace"):
+        pyautogui.press("backspace")
+    elif text in ("press delete", "delete"):
+        pyautogui.press("delete")
+    elif text in ("press space", "space"):
+        pyautogui.press("space")
+    elif text.startswith("find:"):
+        query = text.split(":", 1)[1].strip()
+        if query:
+            pyautogui.hotkey("ctrl", "f")
+            pyautogui.write(query, interval=0.02)
+            speak("Searching in the current application.")
+    elif text.startswith("open website:"):
+        site = text.split(":", 1)[1].strip()
+        if site:
+            if "." not in site:
+                site += ".com"
+            webbrowser.open("https://" + site)
+            speak("Opening " + site)
+
     elif text.startswith("open "):
         app = text.removeprefix("open ").strip()
         if open_application(app):
